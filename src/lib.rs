@@ -1,33 +1,58 @@
-use std::thread;
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::{sync::mpsc, thread};
 
 pub struct ThreadPool {
-    threads: Vec<thread::JoinHandle<()>>,
+    workers: Vec<Worker>,
+    sender: mpsc::Sender<Job>,
 }
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
 
 impl ThreadPool {
     pub fn new(size: usize) -> ThreadPool {
         assert!(size > 0);
 
-        let mut threads = Vec::with_capacity(size);
+        let (sender, receiver) = mpsc::channel();
 
-        for _ in 0..size {
-            todo!("Create thread and store theme")
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            let worker = Worker::new(id, Arc::clone(&receiver));
+            workers.push(worker);
         }
 
-        ThreadPool { threads }
+        ThreadPool { workers, sender }
     }
 
     pub fn execute<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
+        let job = Box::new(f);
+
+        self.sender.send(job).unwrap();
     }
 }
 
-pub struct Worker {
+struct Worker {
     id: usize,
-    handle: JoinHandle<()>,
+    thread: JoinHandle<()>,
 }
 
-impl Worker {}
+impl Worker {
+    pub fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Worker {
+        let thread = thread::spawn(move || loop {
+            let job = receiver.lock().unwrap().recv().unwrap();
+
+            println!("Worker {id} got a job; executing.");
+
+            job();
+        });
+
+        Worker { id, thread }
+    }
+}
